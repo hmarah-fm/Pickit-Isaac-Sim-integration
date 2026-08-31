@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/build
+**/install
+**/log
+**/.pytest_cache
+**/.vscode
+**/.idea
+
+# Do not send Isaac cache/state or local exports.
+docker/isaacsim/cache
+docker/isaacsim/logs
+*.pcd

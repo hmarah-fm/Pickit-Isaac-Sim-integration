@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>pcd_converter</name>
+  <version>0.1.0</version>
+  <description>Converts synchronized Zivid XYZ and RGB data to Pickit's virtual-camera PointCloud2 interface.</description>
+  <maintainer email="robotics@example.invalid">Robotics Team</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>message_filters</depend>
+  <depend>pickit_camera_msgs</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

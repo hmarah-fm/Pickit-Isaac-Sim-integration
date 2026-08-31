@@ -1,0 +1,16 @@
+__pycache__
+*.mmd
+!README.md
+tmp
+.vscode
+*.egg-info
+/ros2_ws/
+*.tmp
+
+
+# Local machine-specific Docker/ROS configuration
+.env
+# ROS / ROS2 build artifacts
+**/pcd_converter_ws/build/
+**/pcd_converter_ws/install/
+**/pcd_converter_ws/log/

@@ -1,0 +1,8 @@
+[submodule "robot_workcell_usd"]
+	path = isaacsim_workspace
+	url = https://github.com/ifu-ev/robot_workcell_usd.git
+	branch = isaacsim_5.1
+[submodule "docker/pickit-sim-camera-bridge"]
+	path = docker/pickit-sim-camera-bridge
+	url = https://github.com/Pickit3D/pickit-sim-camera-bridge.git
+	branch = main
