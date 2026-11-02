@@ -1,0 +1,110 @@
+diff --git a/zenoh-plugin-ros2dds/src/route_publisher.rs b/zenoh-plugin-ros2dds/src/route_publisher.rs
+index 90b7d47..577ad6d 100644
+--- a/zenoh-plugin-ros2dds/src/route_publisher.rs
++++ b/zenoh-plugin-ros2dds/src/route_publisher.rs
+@@ -28,6 +28,7 @@ use serde::{Serialize, Serializer};
+ use zenoh::{
+     key_expr::{keyexpr, OwnedKeyExpr},
+     liveliness::LivelinessToken,
++    matching::MatchingListener,
+     qos::{CongestionControl, Priority, Reliability},
+     sample::Locality,
+     Wait,
+@@ -105,10 +106,17 @@ pub struct RoutePublisher {
+     remote_routes: HashSet<String>,
+     // the list of nodes served by this route
+     local_nodes: HashSet<String>,
++    #[serde(skip)]
++    matching_listener: Option<MatchingListener<()>>,
+ }
+ 
+ impl Drop for RoutePublisher {
+     fn drop(&mut self) {
++        if let Some(listener) = self.matching_listener.take() {
++            if let Err(e) = listener.undeclare().wait_callbacks().wait() {
++                tracing::warn!("{self}: failed to undeclare matching listener: {e}");
++            }
++        }
+         self.deactivate_dds_reader();
+     }
+ }
+@@ -221,7 +229,7 @@ impl RoutePublisher {
+         // (copy/move all required args for the callback)
+         let dds_reader: Arc<AtomicDDSEntity> = Arc::new(DDS_ENTITY_NULL.into());
+ 
+-        publisher
++        let matching_listener = publisher
+             .matching_listener()
+             .callback({
+                 let dds_reader = dds_reader.clone();
+@@ -256,7 +264,6 @@ impl RoutePublisher {
+                     }
+                 }
+             })
+-            .background()
+             .await
+             .map_err(|e| format!("Failed to listen of matching status changes: {e}",))?;
+ 
+@@ -277,6 +284,7 @@ impl RoutePublisher {
+             liveliness_token: None,
+             remote_routes: HashSet::new(),
+             local_nodes: HashSet::new(),
++            matching_listener: Some(matching_listener),
+         })
+     }
+ 
+diff --git a/zenoh-plugin-ros2dds/src/route_service_cli.rs b/zenoh-plugin-ros2dds/src/route_service_cli.rs
+index 3c1d6b3..7b84950 100644
+--- a/zenoh-plugin-ros2dds/src/route_service_cli.rs
++++ b/zenoh-plugin-ros2dds/src/route_service_cli.rs
+@@ -30,6 +30,7 @@ use zenoh::{
+     internal::buffers::{Buffer, ZBuf, ZSlice},
+     key_expr::{keyexpr, OwnedKeyExpr},
+     liveliness::LivelinessToken,
++    matching::MatchingListener,
+     query::{Querier, Reply},
+     sample::Locality,
+     Wait,
+@@ -81,10 +82,17 @@ pub struct RouteServiceCli {
+     remote_routes: HashSet<String>,
+     // the list of nodes served by this route
+     local_nodes: HashSet<String>,
++    #[serde(skip)]
++    matching_listener: Option<MatchingListener<()>>,
+ }
+ 
+ impl Drop for RouteServiceCli {
+     fn drop(&mut self) {
++        if let Some(listener) = self.matching_listener.take() {
++            if let Err(e) = listener.undeclare().wait_callbacks().wait() {
++                tracing::warn!("{self}: failed to undeclare matching listener: {e}");
++            }
++        }
+         self.deactivate();
+     }
+ }
+@@ -131,7 +139,7 @@ impl RouteServiceCli {
+         let rep_writer: Arc<AtomicDDSEntity> = Arc::new(DDS_ENTITY_NULL.into());
+         let req_reader: Arc<AtomicDDSEntity> = Arc::new(DDS_ENTITY_NULL.into());
+ 
+-        zenoh_querier
++        let matching_listener = zenoh_querier
+             .matching_listener()
+             .callback({
+                 let rep_writer = rep_writer.clone();
+@@ -166,7 +174,6 @@ impl RouteServiceCli {
+                         }
+                 }
+             })
+-            .background()
+             .await
+             .map_err(|e| format!("Route Service Client (ROS:{ros2_name} <-> Zenoh:{zenoh_key_expr}): failed to listen of matching status changes: {e}",))?;
+ 
+@@ -182,6 +189,7 @@ impl RouteServiceCli {
+             liveliness_token: None,
+             remote_routes: HashSet::new(),
+             local_nodes: HashSet::new(),
++            matching_listener: Some(matching_listener),
+         })
+     }
+ 

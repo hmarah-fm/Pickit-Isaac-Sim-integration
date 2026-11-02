@@ -5,8 +5,8 @@ Isaac Sim simulation and Pickit integration workflow. Supports both native and d
 ## What it provides
 
 - Isaac Sim 5.1 simulation with Isaac's internal Jazzy ROS 2 bridge
-- Native Jazzy point cloud conversion node for Pickit
-- Zenoh bridge for cross-network bridging between ROS 2 topic space and Pickit host interfaces..
+- Native Jazzy point cloud conversion node for Pickit with runtime parameterized sampling (see [SAMPLING_CONFIGURATION.md](SAMPLING_CONFIGURATION.md))
+- Zenoh bridge for cross-network bridging between ROS 2 topic space and Pickit host interfaces
 - Shared Fast DDS configuration and isolated ROS domain for ROS 2 participants
 
 ## Architecture
@@ -193,7 +193,7 @@ Source the appropriate .env file before launching IsaacSim
 ```text
 # source your native ros2 jazzy installation first
 
-export ROS_DOMAIN_ID=28                     # same domain id as .env
+export ROS_DOMAIN_ID=42                  # same domain id as .env
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 export FASTRTPS_DEFAULT_PROFILES_FILE=/home/user/location_to_the_fastdds_config/fastdds.xml
@@ -236,7 +236,7 @@ Set `ROS_AUTOMATIC_DISCOVERY_RANGE` to `SUBNET` if Isaac Sim is running natively
 
 Default Profile:
 ```text
-ROS_DOMAIN_ID=28            # change to value set in your .env. See section 2.
+ROS_DOMAIN_ID=42           # change to value set in your .env. See section 2.
 RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 FASTRTPS_DEFAULT_PROFILES_FILE=/config/fastdds.xml
 FASTDDS_DEFAULT_PROFILES_FILE=/config/fastdds.xml
@@ -297,6 +297,89 @@ The ROS2 Control tags (<Hardware>) in urdf must contain the following to enable 
 
 The Humble branch may use its legacy topic-based binary plugin instead. Keep the implementation branch-specific or select it explicitly in shared Xacro with `ROS_DISTRO`.
 
+## Camera transport operations
+
+Run these commands **on the host**, not inside `robot_container`. They manage
+only `ros2_pcd_publisher` and `zenoh-bridge`; leave Isaac running and play the
+simulation to supply camera data.
+
+### 1. Enter the integration directory
+
+For the Cypress host checkout:
+
+```bash
+cd /home/hussein/workspaces/2022-0780-Cypress/workspace/external/Pickit-Isaac-Sim-integration
+```
+
+For another checkout, use its integration directory containing `compose.yaml`
+and the configured `.env`.
+
+### 2. Build the camera transport images
+
+```bash
+docker compose build ros2_pcd_publisher zenoh-bridge
+```
+
+This builds the converter image and the patched Zenoh bridge. The initial
+Zenoh build may take several minutes.
+
+### 3. Deploy or update
+
+Create or update the converter container from the built image, rebuild its
+bind-mounted ROS package, then recreate the bridge:
+
+```bash
+docker compose up -d --no-deps --force-recreate ros2_pcd_publisher
+
+docker compose exec ros2_pcd_publisher bash -lc \
+  'source /opt/ros/jazzy/setup.bash &&
+   source /ros2_ws/install/setup.bash &&
+   cd /mounted_folder/pcd_converter_ws &&
+   colcon build --packages-select pcd_converter --symlink-install'
+
+docker compose restart ros2_pcd_publisher
+
+docker compose up -d --no-deps --force-recreate zenoh-bridge
+```
+
+Use the build and deployment steps after code or image changes. A restart alone
+does not install a changed image. The explicit ROS package build also refreshes
+an existing bind-mounted workspace.
+
+### 4. Normal start
+
+After deployment:
+
+```bash
+docker compose up -d --no-deps ros2_pcd_publisher zenoh-bridge
+```
+
+### 5. Stop camera transport only
+
+```bash
+docker compose stop zenoh-bridge ros2_pcd_publisher
+```
+
+This leaves Isaac and unrelated services running. Avoid `docker compose down`
+for camera-only operations: it can stop the wider integration stack.
+
+### 6. Restart, status and logs
+
+```bash
+# Restart both camera services.
+docker compose restart ros2_pcd_publisher zenoh-bridge
+
+# Check status.
+docker compose ps ros2_pcd_publisher zenoh-bridge
+
+# Follow logs. Ctrl+C exits the viewer without stopping services.
+docker compose logs -f --tail 50 ros2_pcd_publisher zenoh-bridge
+```
+
+Check the image in the [Cypress Pickit web UI](http://192.168.66.1/), or use your
+configured Pickit address. For message-count and timestamp-pairing checks, see
+[Regression and live-delivery tests](#regression-and-live-delivery-tests).
+
 ## Point-cloud pipeline
 
 The intended topic ownership is:
@@ -311,6 +394,157 @@ PCD converter
 ```
 
 Only Isaac publishes `/ZividCamera/*`. Only the PCD converter publishes `/simulated_camera/depth_registered/*`. Avoid duplicate publishers for either pipeline stage.
+
+### Duplicate-free Zenoh camera transport
+
+The top-level Compose service builds
+`cypress/zenoh-bridge-ros2dds:1.9.0-route-lifetime` instead of running the unpatched
+upstream image. [The build](docker/zenoh/Dockerfile) pins upstream commit
+`26e66e1f9867b9faf140fde4e38785508024a554` and applies
+[a route-lifetime patch](docker/zenoh/route-lifetime.patch).
+
+Zenoh 1.9.0 detaches matching listeners from their publisher and service-client
+routes. When a route is removed, an old listener can survive and create another
+DDS reader on reconnect. Each reader forwards another copy of the same sample.
+See [upstream issue 722](https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/issues/722).
+The patch owns each listener in its route, undeclares it and waits for in-flight
+callbacks before deleting the DDS entities. Restarting alone only clears the
+accumulated readers; it does not prevent recurrence.
+
+The bridge additionally limits the point-cloud route to 1 Hz with
+`plugins.ros2dds.pub_max_frequencies`. This is a bandwidth safeguard, not a
+replacement for the lifetime fix. A roughly 10.5 MB cloud at 1 Hz should use
+roughly 10.5 MB/s of payload, not a saturated gigabit link. Independently
+downsampling CameraInfo could break timestamp pairing, so it is not rate-limited
+in the bridge.
+
+There is a separate large-frame delivery safeguard: top-level
+`qos.publication` sets `congestion_control: "block"` **only** for the cloud's
+Zenoh key. Pickit's best-effort DDS subscriber otherwise creates a droppable
+route, even when `reliable_routes_blocking` is enabled. In the live test, the
+unmodified droppable route delivered CameraInfo but zero clouds through the
+remote router; the scoped override delivered complete clouds and restored the
+web image. It does not change DDS reliability or block unrelated routes. Keep
+the 1 Hz caps: blocking is intended to send a complete frame at the bounded
+camera rate, not to queue unbounded high-rate clouds on a slow link.
+
+For build, deployment, start, stop and log commands, see
+[Camera transport operations](#camera-transport-operations).
+
+Changing the image/build configuration requires `up --force-recreate`, not only
+`restart`. Initial compilation needs outbound access to GitHub/crates.io and may
+take several minutes; two build jobs limit memory use alongside Isaac.
+
+To roll back, set `zenoh-bridge.image` in the top-level Compose file back to
+`eclipse/zenoh-bridge-ros2dds:1.9.0`, remove its `build` block and recreate only
+that service with `docker compose up -d --no-deps --force-recreate zenoh-bridge`.
+This reintroduces the known duplication
+bug; use it for diagnosis only. Keep the patched image available.
+
+### Converter startup parameters
+
+[The shared defaults](docker/pcd_converter/mounted_folder/pcd_converter_ws/src/pcd_converter/pcd_converter/configuration.py)
+are declared and consumed by the node and exposed as typed launch arguments.
+Parameters are read-only after startup. For example, when launching the installed
+package in a sourced ROS environment:
+
+```bash
+ros2 launch pcd_converter zivid_pcd_launch.launch.py \
+  publish_hz:=1.0 sync_slop_seconds:=0.1 sync_queue_size:=5 \
+  registration_delay_seconds:=2.0 registration_publish_hz:=0.2
+```
+
+Do not launch a second converter alongside the Compose-managed publisher.
+Other parameters configure the three input topics, both output topics,
+`registration_topic`, `output_frame_id`, `camera_serial`, `camera_namespace`,
+`camera_type`, `camera_source`, `rgb_optical_frame`, `root_frame`, and
+`heartbeat_timeout_seconds`. Existing registration identity/source defaults are
+preserved. Topic changes must also be reflected in the bridge allowlist and
+Pickit camera configuration.
+
+`publish_hz` defaults to **1.0**, using monotonic wall time to prevent catch-up
+bursts after delays or simulation-clock jumps. CameraInfo is cached, then
+published with the cloud's timestamp and frame. Until input CameraInfo arrives,
+the converter warns and withholds output rather than inventing calibration.
+The first registration is sent after `registration_delay_seconds`, then repeated
+at `registration_publish_hz`. Invalid rates, delays, queue sizes and empty
+topics/frames fail startup with an error.
+
+### Regression and live-delivery tests
+
+Converter tests use the actual ROS message classes and node in an isolated domain:
+
+```bash
+docker compose exec -e ROS_DOMAIN_ID=42 ros2_pcd_publisher bash -lc \
+  'source /opt/ros/jazzy/setup.bash; source /ros2_ws/install/setup.bash; source /mounted_folder/pcd_converter_ws/install/setup.bash; cd /mounted_folder/pcd_converter_ws/src/pcd_converter; python3 -m unittest discover -s test -v'
+```
+
+The transport tests require a Jazzy Python environment with `rclpy`, `std_msgs`
+and `eclipse-zenoh==1.9.0`. Install the latter into a dedicated Python virtual
+environment with access to the system ROS packages, not into Isaac's Python.
+On an Ubuntu/Jazzy host:
+
+```bash
+/usr/bin/python3 -m venv --system-site-packages /tmp/pickit-zenoh-tests
+source /tmp/pickit-zenoh-tests/bin/activate
+python3 -m pip install eclipse-zenoh==1.9.0
+source /opt/ros/jazzy/setup.bash
+```
+
+Start a disposable test bridge in a separate terminal; do not use production
+domain 42:
+
+```bash
+docker run --rm --name cypress-zenoh-regression --network host \
+  cypress/zenoh-bridge-ros2dds:1.9.0-route-lifetime \
+  --domain 42 --listen tcp/127.0.0.1:17447 \
+  --no-multicast-scouting --ros-localhost-only
+```
+
+Then run from a sourced ROS environment **on the host** (a bridge-networked
+container has a different loopback interface):
+
+```bash
+ROS_DOMAIN_ID=42 ROS_LOCALHOST_ONLY=1 python3 tests/test_zenoh_reconnect.py \
+  --endpoint tcp/127.0.0.1:17447 --cycles 10
+docker stop cypress-zenoh-regression
+```
+
+Each cycle restarts a small DDS publisher and its native Zenoh subscriber plus
+ROS liveliness token. Acceptance: at least five unique messages per cycle and
+exactly one copy each. The same test must fail against a clean upstream 1.9.0
+bridge after reconnect, demonstrating that the test exercises the original bug.
+
+With the real simulation playing, test each end of the camera link:
+
+```bash
+python3 tests/verify_camera_delivery.py --endpoint tcp/127.0.0.1:7447 --seconds 60
+# Replace with the Pickit address configured in .env:
+python3 tests/verify_camera_delivery.py --endpoint tcp/192.168.66.1:7447 --seconds 60
+```
+
+The live probe checks ROS CDR timestamps, duplicate counts, cloud rate and
+cloud/CameraInfo pairing. It announces properly escaped ROS subscriber liveliness
+tokens so a Pickit camera reconnect cannot disable its DDS route during the
+measurement. By default it requires paired clouds at at least 80% of the expected
+1 Hz rate; use `--minimum-clouds` only for an intentionally slower source.
+A missing stream or duplicate is a nonzero exit, not a successful empty
+measurement. A subscriber connected to the remote router proves
+transport to that router, not image rendering or consumption by Pickit's camera
+node. Also inspect the Pickit web UI. If the UI remains blank despite paired
+remote delivery, inspect Pickit's camera subscriptions/driver separately.
+
+Validated on the Cypress workcell on 2026-10-27 after restarting both camera
+services: all 12 converter tests passed; the stock bridge duplicated messages
+on reconnect 2, while the patched bridge passed 10 reconnect cycles (200 checked
+messages, one copy each). In a final 120-second window, the host received 114
+clouds and the Pickit-router client received 115 clouds, with no duplicate
+timestamps and approximately 10 MB/s of cloud payload at each endpoint.
+Timestamp pairing passed with the permitted measurement-window boundary
+differences. Pickit's web UI displayed the gearbox image at 1024 x 640.
+This is a finite live test plus a reconnect regression, not an indefinite soak
+or a power-cycle test. The robot-container profile bind mount takes effect on
+its next recreation; Isaac was not restarted for this repair.
 
 ## Host configuration
 

@@ -1,105 +1,101 @@
 name: gearbox-cell51
 
-# Import services dynamically from the pcd_converter submodule compose file.
-include:
-  - path: ./docker/pickit-sim-camera-bridge/docker-compose.yaml
-
 x-ros2-fastdds-env: &ros2-fastdds-env
-  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-28}
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
   RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-  ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST # LOCALHOST vs SUBNET Refer to README.md, dockerised vs native isaac sim
+  ROS_AUTOMATIC_DISCOVERY_RANGE: SUBNET
   FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds.xml
   FASTDDS_DEFAULT_PROFILES_FILE: /config/fastdds.xml
 
-x-isaac-pcd-image: &isaac-pcd-image
-  image: gearbox/isaac-sim-pcd-jazzy:5.1.0
-  build:
-    context: .
-    dockerfile: docker/isaacsim51/Dockerfile
+# x-isaac-pcd-image: &isaac-pcd-image
+#   image: gearbox/isaac-sim-pcd-jazzy:5.1.0
+#   build:
+#     context: .
+#     dockerfile: docker/isaacsim51/Dockerfile
 
 services:
-  isaac-sim:
-    <<: *isaac-pcd-image
-    container_name: gearbox51_isaac_sim
-    user: "0:0"
-    network_mode: host
-    ipc: host
-    runtime: nvidia
-    gpus: all
-    stop_grace_period: 30s
-    environment:
-      <<: *ros2-fastdds-env
-      ACCEPT_EULA: "Y"
-      OMNI_ENV_PRIVACY_CONSENT: "Y"
-      NVIDIA_DRIVER_CAPABILITIES: all
-    volumes:
-      - ./isaacsim_workspace:/isaacsim_workspace:rw
-      - ./config/fastdds.xml:/config/fastdds.xml:ro
-      - ${ISAAC_CACHE_DIR}/main:/root/.cache/ov:rw
-      - ${ISAAC_CACHE_DIR}/computecache:/root/.nv/ComputeCache:rw
-      - ${ISAAC_DATA_DIR}/logs:/root/.nvidia-omniverse/logs:rw
-      - ${ISAAC_DATA_DIR}/config:/root/.nvidia-omniverse/config:rw
-      - ${ISAAC_DATA_DIR}/data:/root/.local/share/ov/data:rw
-      - ${ISAAC_DATA_DIR}/pkg:/root/.local/share/ov/pkg:rw
-    entrypoint: ["/opt/gearbox/launch-isaac-jazzy.sh"]
-    command:
-      - --enable
-      - isaacsim.ros2.bridge
-      - --/app/file=/isaacsim_workspace/scenes/gearbox_disassembly.usda     # replace with your scene
+#   isaac-sim:
+#     <<: *isaac-pcd-image
+#     container_name: gearbox51_isaac_sim
+#     user: "0:0"
+#     networks:
+#       - ci_net
+#     ipc: host
+#     runtime: nvidia
+#     gpus: all
+#     stop_grace_period: 30s
+#     environment:
+#       <<: *ros2-fastdds-env
+#       ACCEPT_EULA: "Y"
+#       OMNI_ENV_PRIVACY_CONSENT: "Y"
+#       NVIDIA_DRIVER_CAPABILITIES: all
+#     volumes:
+#       - ./isaacsim_workspace:/isaacsim_workspace:rw
+#       - ./config/fastdds.xml:/config/fastdds.xml:ro
+#       - ${ISAAC_CACHE_DIR:-/isaac-sim/isaac-sim-cache}/main:/root/.cache/ov:rw
+#       - ${ISAAC_CACHE_DIR:-/isaac-sim/isaac-sim-cache}/computecache:/root/.nv/ComputeCache:rw
+#       - ${ISAAC_DATA_DIR:-/isaac-sim/isaac-sim-data}/logs:/root/.nvidia-omniverse/logs:rw
+#       - ${ISAAC_DATA_DIR:-/isaac-sim/isaac-sim-data}/config:/root/.nvidia-omniverse/config:rw
+#       - ${ISAAC_DATA_DIR:-/isaac-sim/isaac-sim-data}/data:/root/.local/share/ov/data:rw
+#       - ${ISAAC_DATA_DIR:-/isaac-sim/isaac-sim-data}/pkg:/root/.local/share/ov/pkg:rw
+#     entrypoint: ["/opt/gearbox/launch-isaac-jazzy.sh"]
+#     command:
+#       - --enable
+#       - isaacsim.ros2.bridge
+#       - --/app/file=/isaacsim_workspace/scenes/gearbox_disassembly.usda
 
-  # --- OVERRIDE: Zivid/Isaac RGB+XYZ -> Pickit virtual camera bridge ---
-  #
-  # The following services are defined in docker/pickit-sim-camera-bridge/docker-compose.yaml and
-  # overridden here. The bind mount contains:
-  #
-  # /mounted_folder/
-  # ├── run_zivid_pcd.sh
-  # └── pcd_converter_ws/
-  #     ├── src/pcd_converter/
-  #     ├── build/
-  #     ├── install/
-  #     └── log/
-  #
-  # run_zivid_pcd.sh:
-  #   1. Sources /opt/ros/jazzy/setup.bash.
-  #   2. Sources pcd_converter_ws/install/setup.bash if present.
-  #   3. Checks: ros2 pkg prefix pcd_converter.
-  #   4. Builds only if the package is not discoverable.
-  #   5. Launches: ros2 launch pcd_converter zivid_pcd_launch.launch.py.
-  
   ros2_pcd_publisher:
+    image: gearbox-cell51-ros2_pcd_publisher
+    build:
+      context: ./docker/pickit-sim-camera-bridge
+      dockerfile: Dockerfile
+    container_name: ros2_pcd_publisher
+    networks:
+      - ci_net
+    ipc: host
     environment:
       <<: *ros2-fastdds-env
       ROS_DISTRO: jazzy
       WORKSPACE_DIR: /mounted_folder/pcd_converter_ws
       PACKAGE_NAME: pcd_converter
       LAUNCH_FILE: zivid_pcd_launch.launch.py
-
+      DOWNSAMPLE_FACTOR: ${DOWNSAMPLE_FACTOR:-4}
+      PUBLISH_HZ: ${PUBLISH_HZ:-0.5}
     volumes:
       - ./config/fastdds.xml:/config/fastdds.xml:ro
-
-      # Mount the workspace, launch file, bridge node, and startup script together.
-      # Keep this read-write because colcon writes build/, install/, and log/.
       - ./docker/pcd_converter/mounted_folder:/mounted_folder:rw
-
-    # Override any submodule image entrypoint so this container always follows
-    # the self-build / self-launch workflow.
     entrypoint:
       - /bin/bash
       - /mounted_folder/run_zivid_pcd.sh
-
-    # Do not set a command here. Any additional values passed to this service
-    # would otherwise become launch arguments after the script name.
-
     restart: unless-stopped
 
-    depends_on:
-      isaac-sim:
-        condition: service_started
-
   zenoh-bridge:
+    image: cypress/zenoh-bridge-ros2dds:1.9.0-route-lifetime
+    build:
+      context: .
+      dockerfile: docker/zenoh/Dockerfile
+    container_name: zenoh_bridge_connector
+    networks:
+      - ci_net
+    ipc: host
+    restart: unless-stopped
     environment:
       <<: *ros2-fastdds-env
+      ROS_DISTRO: jazzy
+      RUST_LOG: debug
+    volumes:
+      - ./config/fastdds.xml:/config/fastdds.xml:ro
+      - ./docker/pickit-sim-camera-bridge/config/zenoh_config.json5:/zenoh_config.json5:ro
+    command:
+      - --config
+      - /zenoh_config.json5
+      - --connect
+      - tcp/${PICKIT_ROS2_IP:-192.168.66.1}:7447
     depends_on:
       ros2_pcd_publisher:
         condition: service_started
+
+networks:
+  ci_net:
+    external: true
+    name: ci_net

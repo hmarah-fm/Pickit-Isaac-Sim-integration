@@ -13,36 +13,20 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
-
-DEFAULTS = {
-    "input_pointcloud_topic": "/ZividCamera/pointcloud",
-    "input_rgb_topic": "/ZividCamera/rgb",
-    "input_camera_info_topic": "/ZividCamera/camera_info",
-    "output_pointcloud_topic": "/simulated_camera/depth_registered/points_3d_rectified",
-    "output_camera_info_topic": "/simulated_camera/depth_registered/camera_info",
-    "registration_topic": "/pickit/camera_registrations",
-    "output_frame_id": "simulated_camera/simulated_camera_rgb_optical_frame",
-    "camera_serial": "1-simulated_camera",
-    "camera_namespace": "/simulated_camera",
-    "camera_type": "1",
-    "camera_source": "1",
-    "rgb_optical_frame": "simulated_camera/simulated_camera_rgb_optical_frame",
-    "root_frame": "simulated_camera/simulated_camera_link",
-    "heartbeat_timeout_seconds": "-1.0",
-    "publish_hz": "2.0",
-    "sync_slop_seconds": "0.1",
-    "sync_queue_size": "5",
-    "registration_delay_seconds": "2.0",
-}
+from pcd_converter.configuration import DEFAULT_PARAMETERS
 
 
 def generate_launch_description():
     declarations = [
-        DeclareLaunchArgument(name, default_value=value)
-        for name, value in DEFAULTS.items()
+        DeclareLaunchArgument(name, default_value=str(value))
+        for name, value in DEFAULT_PARAMETERS.items()
     ]
-    parameters = [{name: LaunchConfiguration(name)} for name in DEFAULTS]
+    parameters = [{
+        name: ParameterValue(LaunchConfiguration(name), value_type=type(value))
+        for name, value in DEFAULT_PARAMETERS.items()
+    }]
 
     bridge = Node(
         package="pcd_converter",
