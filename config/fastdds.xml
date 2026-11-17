@@ -17,14 +17,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 </license>
 
-<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles" >
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
     <transport_descriptors>
         <transport_descriptor>
             <transport_id>UdpTransport</transport_id>
             <type>UDPv4</type>
             <sendBufferSize>26214400</sendBufferSize>
             <receiveBufferSize>26214400</receiveBufferSize>
-            <maxMessageSize>65000</maxMessageSize>
+            <maxMessageSize>65500</maxMessageSize>
             <non_blocking_send>true</non_blocking_send>
         </transport_descriptor>
     </transport_descriptors>
