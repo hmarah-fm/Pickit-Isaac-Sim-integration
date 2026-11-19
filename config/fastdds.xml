@@ -35,16 +35,6 @@ limitations under the License.
                 <transport_id>UdpTransport</transport_id>
             </userTransports>
             <useBuiltinTransports>false</useBuiltinTransports>
-            <netmask_filter>ON</netmask_filter>
-            <ignore_non_matching_locators>true</ignore_non_matching_locators>
         </rtps>
     </participant>
-
-    <data_writer profile_name="default_datawriter_netmask" is_default_profile="true">
-        <ignore_non_matching_locators>true</ignore_non_matching_locators>
-    </data_writer>
-
-    <data_reader profile_name="default_datareader_netmask" is_default_profile="true">
-        <ignore_non_matching_locators>true</ignore_non_matching_locators>
-    </data_reader>
 </profiles>
